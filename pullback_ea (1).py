@@ -1,4 +1,5 @@
 import MetaTrader5 as mt5
+import sys
 import time
 
 # === SETTINGS ===
@@ -13,7 +14,9 @@ SYMBOL = "EURUSD"
 TIMEFRAME = mt5.TIMEFRAME_M15
 
 # === CONNECT ===
-mt5.initialize()
+if not mt5.initialize():
+    print(f"MT5 initialize() failed, error code: {mt5.last_error()}")
+    sys.exit(1)
 
 last_trade_time = 0
 COOLDOWN = 180  # seconds
@@ -33,7 +36,7 @@ def get_position():
 
 def close_position(position):
     price = mt5.symbol_info_tick(SYMBOL).bid
-    mt5.order_send({
+    result = mt5.order_send({
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": SYMBOL,
         "volume": position.volume,
@@ -44,6 +47,10 @@ def close_position(position):
         "magic": 123456,
         "comment": "Close trade"
     })
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"Close order FAILED for ticket {position.ticket}: {result}")
+        return False
+    return True
 
 def open_trade(order_type):
     price = get_price()
@@ -58,7 +65,7 @@ def open_trade(order_type):
         tp = price - TAKE_PROFIT_PIPS * point
         order_type_mt5 = mt5.ORDER_TYPE_SELL
 
-    mt5.order_send({
+    result = mt5.order_send({
         "action": mt5.TRADE_ACTION_DEAL,
         "symbol": SYMBOL,
         "volume": LOT_SIZE,
@@ -70,6 +77,10 @@ def open_trade(order_type):
         "magic": 123456,
         "comment": "Pullback EA"
     })
+    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+        print(f"Open order FAILED ({order_type}): {result}")
+        return False
+    return True
 
 # === MAIN LOOP ===
 while True:
@@ -81,7 +92,7 @@ while True:
 
         if profit >= PROFIT_TARGET or profit <= MAX_LOSS:
             print(f"Closing trade: {profit}")
-            close_position(position)
+            close_position(position)  # retry next loop iteration if this failed
             time.sleep(2)
             continue
 
@@ -90,18 +101,19 @@ while True:
         time.sleep(1)
         continue
 
-    # === Indicators
-    fast_now = get_ma(5)
-    fast_prev = get_ma(5, 1)
+    # === Indicators (based on the last CLOSED candle, shift=1, to avoid repainting
+    # off the still-forming current bar)
+    fast_now = get_ma(5, 1)
+    fast_prev = get_ma(5, 2)
 
-    slow_now = get_ma(10)
-    slow_prev = get_ma(10, 1)
+    slow_now = get_ma(10, 1)
+    slow_prev = get_ma(10, 2)
 
-    trend = get_ma(200)
+    trend = get_ma(200, 1)
 
     price = get_price()
 
-    rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 0, 2)
+    rates = mt5.copy_rates_from_pos(SYMBOL, TIMEFRAME, 1, 2)
     close = rates[0]['close']
     prev_close = rates[1]['close']
 
